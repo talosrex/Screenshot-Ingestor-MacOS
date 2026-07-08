@@ -1,0 +1,4 @@
+interface:
+  display_name: "Screenshot Content Ingest"
+  short_description: "Extract, score, merge, and tag screenshot captures"
+  default_prompt: "Use $screenshot-content-ingest to extract, score, and organize content from a folder of screenshots."
