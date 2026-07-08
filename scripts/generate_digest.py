@@ -6,8 +6,10 @@ renders the optional editorial synthesis layer: entries grouped into themed
 sections, each with a one-sentence takeaway. Coverage is complete -- every
 entry appears via exactly one finding -- but only `tier: "featured"` findings
 get the full card treatment; `tier: "standard"` findings render as compact
-rows so a large batch stays scannable. See references/output-schema.md for
-the `digest` schema and SKILL.md step 9 for how it's generated.
+rows so a large batch stays scannable. Includes the same sidebar
+search/filter/sort pattern as generate_dashboard.py, applied to findings
+instead of raw entries. See references/output-schema.md for the `digest`
+schema and SKILL.md step 9 for how it's generated.
 """
 
 from __future__ import annotations
@@ -16,21 +18,6 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
-
-
-def esc(value: Any) -> str:
-    text = "" if value is None else str(value)
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#039;")
-    )
-
-
-def slugify(text: str) -> str:
-    return "".join(c if c.isalnum() else "-" for c in text.lower()).strip("-")
 
 
 def load_data(path: Path) -> dict:
@@ -44,70 +31,62 @@ def entries_by_id(data: dict) -> dict[str, dict]:
     return {entry.get("id"): entry for entry in data.get("entries") or []}
 
 
-def finding_image(entry: dict | None) -> str | None:
-    if not entry:
-        return None
-    files = ((entry.get("consolidation") or {}).get("source_images")) or []
-    return files[0] if files else None
+def flatten_findings(data: dict) -> list[dict]:
+    digest = data.get("digest") or {}
+    if not digest.get("generated"):
+        raise ValueError("data['digest']['generated'] is not true -- run the digest pass (SKILL.md step 9) first.")
+
+    lookup = entries_by_id(data)
+    rows: list[dict] = []
+    for section_order, section in enumerate(digest.get("sections") or []):
+        section_title = section.get("title") or section.get("id") or "Untitled section"
+        section_id = section.get("id") or section_title
+        for finding in section.get("findings") or []:
+            entry = lookup.get(finding.get("entry_id")) or {}
+            source = entry.get("source") or {}
+            content = entry.get("content") or {}
+            files = ((entry.get("consolidation") or {}).get("source_images")) or []
+            rows.append(
+                {
+                    "entry_id": finding.get("entry_id"),
+                    "section_title": section_title,
+                    "section_id": section_id,
+                    "section_order": section_order,
+                    "tier": finding.get("tier") or "standard",
+                    "headline": finding.get("headline") or entry.get("title") or "(untitled)",
+                    "takeaway": finding.get("takeaway") or "",
+                    "summary": finding.get("summary") or content.get("summary") or "",
+                    "badge": finding.get("badge") or "",
+                    "names": finding.get("names") or [],
+                    "status": finding.get("status") or "usable",
+                    "rank": finding.get("rank"),
+                    "source_app": source.get("app") or "unknown",
+                    "image": files[0] if files else None,
+                    "files": files,
+                    "visible_text": content.get("visible_text") or "",
+                }
+            )
+    return rows
 
 
-def finding_files(entry: dict | None) -> list[str]:
-    if not entry:
-        return []
-    return ((entry.get("consolidation") or {}).get("source_images")) or []
+def build_stats(rows: list[dict], section_count: int) -> dict:
+    by_section: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    for row in rows:
+        by_section[row["section_title"]] = by_section.get(row["section_title"], 0) + 1
+        by_source[row["source_app"]] = by_source.get(row["source_app"], 0) + 1
+    return {
+        "total": len(rows),
+        "featured": sum(1 for r in rows if r["tier"] == "featured"),
+        "needsReview": sum(1 for r in rows if r["status"] == "needs-review"),
+        "sections": section_count,
+        "bySection": sorted(by_section.items(), key=lambda kv: kv[1], reverse=True),
+        "bySourceApp": sorted(by_source.items(), key=lambda kv: kv[1], reverse=True),
+    }
 
 
-def status_class(status: str | None) -> str:
-    return "warn" if status == "needs-review" else "good"
-
-
-def render_featured(finding: dict, entry: dict | None) -> str:
-    image = finding_image(entry)
-    thumb = (
-        f'<img src="{esc(image)}" alt="{esc(finding.get("headline", ""))}" loading="lazy">'
-        if image
-        else '<div class="placeholder"></div>'
-    )
-    badge = finding.get("badge")
-    source_app = ((entry or {}).get("source") or {}).get("app")
-    status = finding.get("status") or "usable"
-    names = finding.get("names") or []
-    names_html = "".join(f"<span>{esc(name)}</span>" for name in names)
-    takeaway = finding.get("takeaway")
-    summary = finding.get("summary") or ((entry or {}).get("content") or {}).get("summary") or ""
-    files = finding_files(entry)
-    files_html = "".join(f'<a href="{esc(f)}" target="_blank">{esc(Path(f).name)}</a>' for f in files)
-    eyebrow_bits = [b for b in [badge, source_app, status] if b]
-    eyebrow_html = "".join(
-        f"<span>{esc(bit)}</span>" if i else f"<span>{esc(bit)}</span>" for i, bit in enumerate(eyebrow_bits)
-    )
-    return f"""
-    <article class="card">
-      <div class="shot">{thumb}</div>
-      <div class="copy">
-        <div class="eyebrow">{eyebrow_html}</div>
-        <h3>{esc(finding.get("headline") or (entry or {}).get("title") or "(untitled)")}</h3>
-        <p>{esc(summary)}</p>
-        {f'<div class="takeaway"><strong>Takeaway:</strong> {esc(takeaway)}</div>' if takeaway else ""}
-        <div class="names">{names_html}</div>
-        <details>
-          <summary>Source: {esc(finding.get("entry_id"))}</summary>
-          <div class="files">{files_html}</div>
-        </details>
-      </div>
-    </article>"""
-
-
-def render_standard(finding: dict, entry: dict | None) -> str:
-    cls = status_class(finding.get("status"))
-    headline = finding.get("headline") or (entry or {}).get("title") or "(untitled)"
-    takeaway = finding.get("takeaway") or ""
-    return f"""
-    <div class="compact-row">
-      <span class="dot {cls}"></span>
-      <span class="compact-headline">{esc(headline)}</span>
-      <span class="compact-takeaway">{esc(takeaway)}</span>
-    </div>"""
+def safe_json(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=False).replace("</script", "<\\/script")
 
 
 TEMPLATE = """<!doctype html>
@@ -118,83 +97,282 @@ TEMPLATE = """<!doctype html>
   <title>__PAGE_TITLE__</title>
   <style>
     :root {
-      --bg: #f4f5f7; --paper: #ffffff; --ink: #181a1f; --muted: #626a76;
-      --line: #d7dde5; --green: #0a736a; --blue: #244f98; --amber: #9c5b00;
-      --soft: #edf2f5; --shadow: 0 12px 28px rgba(17, 24, 39, .08);
+      --ink: #000000;
+      --navy: #233D4D;
+      --accent: #FE7F2D;
+      --pale: #EAECF0;
+      --bg: var(--pale);
+      --paper: #ffffff;
+      --line: var(--pale);
+      --muted: rgba(35, 61, 77, .68);
+      --shadow: 0 10px 24px rgba(0, 0, 0, .08);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    a { color: var(--blue); }
-    .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 22px 54px; }
-    header { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 22px; align-items: stretch; margin-bottom: 22px; }
-    .hero, .brief, section { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }
-    .hero { padding: 28px; }
-    .kicker { color: var(--green); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
-    h1 { margin: 0; font-size: 38px; line-height: 1.02; letter-spacing: 0; }
-    .hero p { max-width: 760px; color: var(--muted); font-size: 17px; margin: 14px 0 0; }
-    .brief { padding: 22px; }
-    .brief h2, .section-head h2 { margin: 0; font-size: 20px; letter-spacing: 0; }
-    .brief ul { margin: 12px 0 0; padding-left: 20px; }
-    .brief li { margin: 8px 0; }
-    nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 26px; }
-    nav a { text-decoration: none; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; background: var(--paper); padding: 7px 11px; font-size: 13px; font-weight: 650; }
-    section { padding: 20px; margin: 18px 0; }
-    .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 14px; }
-    .section-head p { margin: 0; color: var(--muted); font-size: 13px; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--navy); }
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      min-height: 100vh;
+    }
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      padding: 20px;
+      background: var(--paper);
+      border-right: 1px solid var(--line);
+    }
+    main { padding: 24px; min-width: 0; }
+    h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 0; color: var(--ink); }
+    .kicker { color: var(--accent); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 16px 0; }
+    .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
+    .stat strong { display: block; font-size: 22px; line-height: 1.1; color: var(--navy); }
+    label { display: block; margin: 12px 0 5px; font-size: 12px; color: var(--muted); font-weight: 700; }
+    input, select {
+      width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+      background: #fff; color: var(--ink); font: inherit;
+    }
+    input:focus, select:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(254, 127, 45, .18); }
+    h2 { margin: 20px 0 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .shortlist { margin: 0; padding-left: 18px; }
+    .shortlist li { margin: 6px 0; color: #2a2f36; font-size: 13px; }
+    .bar-list { display: grid; gap: 8px; }
+    .bar-row { display: grid; grid-template-columns: 1fr 30px; gap: 8px; color: var(--muted); font-size: 12px; align-items: center; }
+    .track { height: 7px; border-radius: 999px; background: var(--pale); overflow: hidden; margin-top: 3px; }
+    .fill { height: 100%; width: var(--w); background: var(--navy); }
+    .section-block { margin: 0 0 26px; }
+    .section-head {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+      border-bottom: 2px solid var(--ink); padding-bottom: 8px; margin-bottom: 14px;
+    }
+    .section-head h3 { margin: 0; font-size: 19px; }
+    .section-head span { color: var(--muted); font-size: 12px; white-space: nowrap; }
     .cards { display: grid; gap: 14px; }
-    .card { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
-    .shot img, .placeholder { width: 100%; aspect-ratio: 9 / 16; border-radius: 6px; border: 1px solid var(--line); background: var(--soft); object-fit: cover; object-position: top; display: block; }
-    h3 { margin: 6px 0 8px; font-size: 20px; line-height: 1.2; }
-    .copy p { margin: 0 0 10px; color: #323740; }
+    .card {
+      display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); gap: 16px;
+      padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: var(--shadow);
+    }
+    .shot img, .placeholder {
+      width: 100%; max-height: 430px; aspect-ratio: 9/16; border-radius: 6px; border: 1px solid var(--line);
+      background: var(--pale); object-fit: cover; object-position: top; display: block;
+    }
+    h3.headline { margin: 4px 0 8px; font-size: 19px; line-height: 1.25; color: var(--ink); }
+    .copy p { margin: 0 0 10px; color: #2a2f36; }
     .eyebrow, .names { display: flex; flex-wrap: wrap; gap: 6px; }
-    .eyebrow span, .names span { border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); background: #fff; font-size: 12px; white-space: nowrap; }
-    .eyebrow span:first-child { color: var(--green); border-color: rgba(10, 115, 106, .28); background: rgba(10, 115, 106, .07); }
-    .takeaway { border-left: 3px solid var(--green); padding: 8px 10px; margin: 10px 0; background: rgba(10, 115, 106, .06); border-radius: 0 6px 6px 0; }
+    .eyebrow span, .names span {
+      border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--navy);
+      background: var(--pale); font-size: 11px; white-space: nowrap;
+    }
+    .eyebrow span.status-warn { color: #7a3c00; border-color: rgba(254, 127, 45, .4); background: rgba(254, 127, 45, .14); }
+    .eyebrow span.status-good { color: var(--navy); border-color: rgba(35, 61, 77, .3); background: rgba(35, 61, 77, .08); }
+    .takeaway {
+      border-left: 3px solid var(--accent); padding: 8px 10px; margin: 10px 0;
+      background: rgba(254, 127, 45, .08); border-radius: 0 6px 6px 0; color: #4a2c00;
+    }
     details { margin-top: 10px; color: var(--muted); }
-    summary { cursor: pointer; font-weight: 700; color: var(--blue); }
+    summary { cursor: pointer; font-weight: 700; color: var(--navy); }
     .files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .files a { border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; text-decoration: none; font-size: 12px; background: #fff; }
-    .standard-list { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 12px; }
-    .standard-head { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
-    .compact-row { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--soft); font-size: 13px; }
-    .dot { width: 8px; height: 8px; border-radius: 999px; flex: none; background: var(--muted); }
-    .dot.good { background: var(--green); }
-    .dot.warn { background: var(--amber); }
+    .compact-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 6px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .compact-row:last-child { border-bottom: none; }
+    .dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+    .dot.good { background: var(--navy); }
+    .dot.warn { background: var(--accent); }
     .compact-headline { font-weight: 650; white-space: nowrap; }
     .compact-takeaway { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .note { margin-top: 24px; color: var(--muted); font-size: 13px; }
-    @media (max-width: 860px) {
-      header { grid-template-columns: 1fr; }
-      h1 { font-size: 32px; }
-      .card { grid-template-columns: 110px minmax(0, 1fr); }
+    .empty { padding: 28px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; background: var(--paper); color: var(--muted); }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; height: auto; }
+      main { padding: 16px; }
+      .card { grid-template-columns: 120px minmax(0, 1fr); }
     }
-    @media (max-width: 620px) {
-      .wrap { padding: 18px 12px 40px; }
+    @media (max-width: 640px) {
       .card { grid-template-columns: 1fr; }
-      .shot img, .placeholder { max-height: 360px; object-fit: contain; }
-      .section-head { display: block; }
       .compact-row { flex-wrap: wrap; }
       .compact-takeaway { white-space: normal; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div class="hero">
-        <div class="kicker">__KICKER__</div>
-        <h1>__MAIN_TITLE__</h1>
-        <p>__MAIN_SUBTITLE__</p>
+  <div class="layout">
+    <aside>
+      <div class="kicker">Screenshot Digest</div>
+      <h1>__MAIN_TITLE__</h1>
+      <div class="muted">Every screenshot covered; strongest findings featured.</div>
+      <div class="stats">
+        <div class="stat"><strong id="total">0</strong><span>findings</span></div>
+        <div class="stat"><strong id="shown">0</strong><span>shown</span></div>
+        <div class="stat"><strong id="featured">0</strong><span>featured</span></div>
+        <div class="stat"><strong id="needs">0</strong><span>need review</span></div>
       </div>
-      <aside class="brief">
-        <h2>Editor's shortlist</h2>
-        <ul>__SHORTLIST__</ul>
-      </aside>
-    </header>
-    <nav>__NAV__</nav>
-    __SECTIONS__
-    <div class="note">__NOTE__</div>
+      <label for="search">Search</label>
+      <input id="search" type="search" placeholder="headline, takeaway, source, tag">
+      <label for="section">Section</label>
+      <select id="section"></select>
+      <label for="status">Status</label>
+      <select id="status">
+        <option value="all">All statuses</option>
+        <option value="usable">Usable</option>
+        <option value="needs-review">Needs review</option>
+      </select>
+      <label for="tier">Tier</label>
+      <select id="tier">
+        <option value="all">Featured + standard</option>
+        <option value="featured">Featured only</option>
+        <option value="standard">Standard only</option>
+      </select>
+      <label for="sort">Sort</label>
+      <select id="sort">
+        <option value="section">Section order</option>
+        <option value="needs-review">Needs review first</option>
+        <option value="az">Alphabetical</option>
+      </select>
+      <h2>Editor's shortlist</h2>
+      <ul class="shortlist" id="shortlist"></ul>
+      <h2>By section</h2>
+      <div id="sectionBars" class="bar-list"></div>
+      <h2>By source</h2>
+      <div id="sourceBars" class="bar-list"></div>
+    </aside>
+    <main>
+      <div id="sections"></div>
+    </main>
   </div>
+  <script>
+    const FINDINGS = __FINDINGS__;
+    const STATS = __STATS__;
+    const SHORTLIST = __SHORTLIST__;
+    const state = { search: "", section: "all", status: "all", tier: "all", sort: "section" };
+    const $ = id => document.getElementById(id);
+    const els = ["search","section","status","tier","sort"].reduce((a, id) => (a[id] = $(id), a), {});
+
+    function esc(value) {
+      return String(value ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+    }
+    function options(el, values, label) {
+      el.innerHTML = `<option value="all">All ${label}</option>` + values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    }
+    function bars(el, rows) {
+      const max = rows.length ? rows[0][1] : 1;
+      el.innerHTML = rows.slice(0, 10).map(([label, count]) => {
+        const w = Math.max(4, Math.round(count / max * 100));
+        return `<div class="bar-row"><div><div>${esc(label)}</div><div class="track"><div class="fill" style="--w:${w}%"></div></div></div><strong>${count}</strong></div>`;
+      }).join("");
+    }
+    function init() {
+      options(els.section, [...new Set(FINDINGS.map(f => f.section_title))], "sections");
+      $("total").textContent = STATS.total;
+      $("featured").textContent = STATS.featured;
+      $("needs").textContent = STATS.needsReview;
+      $("shortlist").innerHTML = SHORTLIST.map(item => `<li>${esc(item)}</li>`).join("") || "<li>No shortlist items.</li>";
+      bars($("sectionBars"), STATS.bySection);
+      bars($("sourceBars"), STATS.bySourceApp);
+      Object.entries(els).forEach(([key, input]) => input.addEventListener("input", () => {
+        state[key] = input.value;
+        render();
+      }));
+      render();
+    }
+    function hay(f) {
+      return [f.headline, f.takeaway, f.summary, f.source_app, f.visible_text, (f.names||[]).join(" ")].join(" ").toLowerCase();
+    }
+    function filtered() {
+      const q = state.search.trim().toLowerCase();
+      let rows = FINDINGS.filter(f =>
+        (!q || hay(f).includes(q)) &&
+        (state.section === "all" || f.section_title === state.section) &&
+        (state.status === "all" || f.status === state.status) &&
+        (state.tier === "all" || f.tier === state.tier)
+      );
+      if (state.sort === "needs-review") {
+        rows.sort((a, b) => {
+          const ar = a.status === "needs-review" ? 0 : 1;
+          const br = b.status === "needs-review" ? 0 : 1;
+          return ar - br || a.section_order - b.section_order || (a.rank ?? 999) - (b.rank ?? 999);
+        });
+      } else if (state.sort === "az") {
+        rows.sort((a, b) => a.headline.localeCompare(b.headline));
+      } else {
+        rows.sort((a, b) => a.section_order - b.section_order || (a.rank ?? 999) - (b.rank ?? 999));
+      }
+      return rows;
+    }
+    function groupBySection(rows) {
+      const groups = [];
+      const index = new Map();
+      for (const row of rows) {
+        if (!index.has(row.section_id)) {
+          index.set(row.section_id, groups.length);
+          groups.push({ id: row.section_id, title: row.section_title, rows: [] });
+        }
+        groups[index.get(row.section_id)].rows.push(row);
+      }
+      return groups;
+    }
+    function featuredCard(f) {
+      const thumb = f.image ? `<img src="${encodeURI(f.image)}" loading="lazy" alt="${esc(f.headline)}">` : `<div class="placeholder"></div>`;
+      const statusCls = f.status === "needs-review" ? "status-warn" : "status-good";
+      const eyebrow = [f.badge, f.source_app, f.status].filter(Boolean)
+        .map((bit, i) => `<span class="${i === 2 ? statusCls : ""}">${esc(bit)}</span>`).join("");
+      const names = (f.names || []).map(n => `<span>${esc(n)}</span>`).join("");
+      const files = (f.files || []).map(p => `<a href="${encodeURI(p)}" target="_blank">${esc(p.split("/").pop())}</a>`).join("");
+      return `<article class="card">
+        <div class="shot">${thumb}</div>
+        <div class="copy">
+          <div class="eyebrow">${eyebrow}</div>
+          <h3 class="headline">${esc(f.headline)}</h3>
+          ${f.summary ? `<p>${esc(f.summary)}</p>` : ""}
+          ${f.takeaway ? `<div class="takeaway"><strong>Takeaway:</strong> ${esc(f.takeaway)}</div>` : ""}
+          <div class="names">${names}</div>
+          <details>
+            <summary>Source: ${esc(f.entry_id)}</summary>
+            <div class="files">${files}</div>
+          </details>
+        </div>
+      </article>`;
+    }
+    function standardRow(f) {
+      const cls = f.status === "needs-review" ? "warn" : "good";
+      return `<div class="compact-row">
+        <span class="dot ${cls}"></span>
+        <span class="compact-headline">${esc(f.headline)}</span>
+        <span class="compact-takeaway">${esc(f.takeaway)}</span>
+      </div>`;
+    }
+    function render() {
+      const rows = filtered();
+      $("shown").textContent = rows.length;
+      const groups = groupBySection(rows);
+      if (!groups.length) {
+        $("sections").innerHTML = `<div class="empty">No findings match these filters.</div>`;
+        return;
+      }
+      $("sections").innerHTML = groups.map(group => {
+        const featured = group.rows.filter(f => f.tier === "featured");
+        const standard = group.rows.filter(f => f.tier !== "featured");
+        const featuredHtml = featured.map(featuredCard).join("");
+        const standardHtml = standard.length
+          ? `<div class="compact-list">${standard.map(standardRow).join("")}</div>`
+          : "";
+        return `<div class="section-block">
+          <div class="section-head"><h3>${esc(group.title)}</h3><span>${group.rows.length} finding(s) &middot; ${featured.length} featured</span></div>
+          <div class="cards">${featuredHtml}</div>
+          ${standardHtml}
+        </div>`;
+      }).join("");
+    }
+    init();
+  </script>
 </body>
 </html>
 """
@@ -202,66 +380,16 @@ TEMPLATE = """<!doctype html>
 
 def render(data: dict, title: str) -> str:
     digest = data.get("digest") or {}
-    if not digest.get("generated"):
-        raise ValueError("data['digest']['generated'] is not true -- run the digest pass (SKILL.md step 9) first.")
-
-    lookup = entries_by_id(data)
-    sections = digest.get("sections") or []
+    rows = flatten_findings(data)
+    stats = build_stats(rows, len(digest.get("sections") or []))
     shortlist = digest.get("shortlist") or []
 
-    shortlist_html = "".join(f"<li>{esc(item)}</li>" for item in shortlist) or "<li>No shortlist items.</li>"
-
-    nav_html = "".join(
-        f'<a href="#{esc(slugify(section.get("title", section.get("id", ""))))}">{esc(section.get("title", "Untitled section"))}</a>'
-        for section in sections
-    )
-
-    total_findings = sum(len(section.get("findings") or []) for section in sections)
-    total_entries = len(lookup)
-
-    section_blocks = []
-    for section in sections:
-        findings = sorted(section.get("findings") or [], key=lambda f: f.get("rank") if f.get("rank") is not None else 999)
-        featured = [f for f in findings if f.get("tier") == "featured"]
-        standard = [f for f in findings if f.get("tier") != "featured"]
-
-        featured_html = "".join(render_featured(f, lookup.get(f.get("entry_id"))) for f in featured)
-        standard_html = "".join(render_standard(f, lookup.get(f.get("entry_id"))) for f in standard)
-        standard_block = (
-            f'<div class="standard-list"><div class="standard-head">Also in this section ({len(standard)})</div>{standard_html}</div>'
-            if standard
-            else ""
-        )
-
-        slug = slugify(section.get("title", section.get("id", "")))
-        section_blocks.append(
-            f"""
-            <section id="{esc(slug)}">
-              <div class="section-head">
-                <h2>{esc(section.get("title", "Untitled section"))}</h2>
-                <p>{len(findings)} finding(s) &middot; {len(featured)} featured</p>
-              </div>
-              <div class="cards">{featured_html}</div>
-              {standard_block}
-            </section>"""
-        )
-
     html = TEMPLATE
-    html = html.replace("__PAGE_TITLE__", esc(title))
-    html = html.replace("__KICKER__", "Screenshot Digest")
-    html = html.replace("__MAIN_TITLE__", esc(title))
-    html = html.replace(
-        "__MAIN_SUBTITLE__",
-        "Every screenshot is covered; the strongest findings are featured, the rest listed for a quick scan.",
-    )
-    html = html.replace("__SHORTLIST__", shortlist_html)
-    html = html.replace("__NAV__", nav_html)
-    html = html.replace("__SECTIONS__", "".join(section_blocks))
-    generated_at = digest.get("generated_at") or "unknown time"
-    html = html.replace(
-        "__NOTE__",
-        esc(f"Generated {generated_at} · {total_findings} findings across {len(sections)} section(s), covering {total_entries} entries."),
-    )
+    html = html.replace("__PAGE_TITLE__", title)
+    html = html.replace("__MAIN_TITLE__", title)
+    html = html.replace("__FINDINGS__", safe_json(rows))
+    html = html.replace("__STATS__", safe_json(stats))
+    html = html.replace("__SHORTLIST__", safe_json(shortlist))
     return html
 
 
@@ -277,9 +405,8 @@ def main() -> None:
 
     out_path = Path(args.output)
     out_path.write_text(html, encoding="utf-8")
-    digest = data.get("digest") or {}
-    finding_count = sum(len(s.get("findings") or []) for s in digest.get("sections") or [])
-    print(f"Wrote {out_path} ({finding_count} findings)")
+    rows = flatten_findings(data)
+    print(f"Wrote {out_path} ({len(rows)} findings)")
 
 
 if __name__ == "__main__":
