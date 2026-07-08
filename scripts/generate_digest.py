@@ -95,6 +95,15 @@ TEMPLATE = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>__PAGE_TITLE__</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("screenshot-digest-theme");
+        var theme = saved || ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {}
+    })();
+  </script>
   <style>
     :root {
       --ink: #000000;
@@ -107,13 +116,42 @@ TEMPLATE = """<!doctype html>
       --muted: rgba(35, 61, 77, .68);
       --shadow: 0 10px 24px rgba(0, 0, 0, .08);
     }
+    :root[data-theme="dark"] {
+      --ink: #EAECF0;
+      --navy: #93A9B5;
+      --accent: #FE7F2D;
+      --pale: #1B2A33;
+      --bg: #000000;
+      --paper: #233D4D;
+      --line: rgba(234, 236, 240, .14);
+      --muted: rgba(234, 236, 240, .62);
+      --shadow: 0 10px 24px rgba(0, 0, 0, .55);
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--ink);
       font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      transition: background-color .15s ease, color .15s ease;
     }
+    .theme-toggle {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      width: 100%;
+      margin-bottom: 16px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--ink);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+    }
+    .theme-toggle:hover { border-color: var(--accent); }
     a { color: var(--navy); }
     .layout {
       display: grid;
@@ -206,6 +244,7 @@ TEMPLATE = """<!doctype html>
 <body>
   <div class="layout">
     <aside>
+      <button id="themeToggle" class="theme-toggle" type="button">Dark mode</button>
       <div class="kicker">Screenshot Digest</div>
       <h1>__MAIN_TITLE__</h1>
       <div class="muted">Every screenshot covered; strongest findings featured.</div>
@@ -269,7 +308,21 @@ TEMPLATE = """<!doctype html>
         return `<div class="bar-row"><div><div>${esc(label)}</div><div class="track"><div class="fill" style="--w:${w}%"></div></div></div><strong>${count}</strong></div>`;
       }).join("");
     }
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      try { localStorage.setItem("screenshot-digest-theme", theme); } catch (e) {}
+      $("themeToggle").textContent = theme === "dark" ? "Light mode" : "Dark mode";
+    }
+    function initTheme() {
+      const current = document.documentElement.getAttribute("data-theme") || "light";
+      applyTheme(current);
+      $("themeToggle").addEventListener("click", () => {
+        const now = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        applyTheme(now);
+      });
+    }
     function init() {
+      initTheme();
       options(els.section, [...new Set(FINDINGS.map(f => f.section_title))], "sections");
       $("total").textContent = STATS.total;
       $("featured").textContent = STATS.featured;
