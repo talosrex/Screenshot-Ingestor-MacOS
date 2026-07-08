@@ -70,9 +70,36 @@ The JSON below is also the direct input to `scripts/generate_dashboard.py`, whic
         "unresolved_uncertainties": []
       }
     }
-  ]
+  ],
+  "digest": {
+    "generated": false,
+    "generated_at": "ISO-8601 timestamp or null",
+    "coverage": "complete",
+    "shortlist": [],
+    "sections": [
+      {
+        "id": "slug-for-anchor-links",
+        "title": "Section title",
+        "findings": [
+          {
+            "entry_id": "entry-001",
+            "tier": "featured|standard",
+            "headline": "punchier than the entry title, editorial voice allowed",
+            "summary": "tightened summary, may repeat or condense entries[].content.summary. Omit or null for standard-tier findings.",
+            "takeaway": "one-sentence judgment or recommended action, not a restatement of the summary",
+            "badge": "short key-stat or label shown as an eyebrow chip",
+            "names": [],
+            "status": "usable|needs-review",
+            "rank": 1
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
+
+`digest` is present only when the optional editorial pass (see SKILL.md step 9) has run; otherwise set `"generated": false` and leave `sections` and `shortlist` empty, or omit the field entirely. It is a coverage-complete curation/judgment layer that references `entries[].id` — every entry gets exactly one finding via `entry_id` (nothing is silently dropped, and no finding spans multiple entries), but `tier` distinguishes the small set of `featured` findings (full headline, takeaway, and badge) from `standard` findings (compact: headline, takeaway, and status only — summary/badge/names may be omitted) so a large batch stays scannable without hiding anything. The digest never replaces or edits `entries[]`, so the underlying extraction record stays evidence-only even if the digest's editorial framing changes on a later re-run.
 
 ## Markdown
 

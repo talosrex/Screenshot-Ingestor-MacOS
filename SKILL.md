@@ -50,6 +50,13 @@ Do not assume a default screenshot folder. If the user does not provide screensh
    - When entries are flagged `needs_visual_review` or otherwise look uncertain, run `python3 scripts/dashboard.py <output-json>` to open a local, interactive triage dashboard (same entry cards as the static HTML, served live at `http://127.0.0.1:8765`).
    - Use it to mark each entry Good / Needs OCR redo / Needs manual title / Wrong vault / Merge or split, with an optional note. Decisions save immediately to `<output-json base name>.review.json`.
    - Reprocess only entries whose sidecar status is not `good` (using their `consolidation.source_images`) instead of rerunning the full batch.
+9. Generate a digest (optional).
+   - This is a synthesis pass over the finished, reviewed entries, not a re-extraction: it reads `entries[]` text (titles, summaries, tags, confidence) and does not need to view the screenshots again, so it does not require a vision-capable model.
+   - Spawn a subagent when available with the full reviewed JSON. Ask it to write one digest finding per entry (see the digest prompt below): a headline, a one-sentence takeaway (a judgment or recommended action, not a restatement of the summary), and a `featured`/`standard` tier. Coverage is complete — every entry gets a finding, none are dropped — but only a handful per section should be `featured`; the rest are `standard` (compact) so a large batch stays scannable.
+   - Group findings into a small number of thematic sections (e.g. by shared topic/tags) and write a short top-of-page shortlist of suggested next actions.
+   - Add the resulting `digest` block to the same output JSON (see `references/output-schema.md`) — do not create a second JSON file or edit `entries[]`.
+   - Render it: run `python3 scripts/generate_digest.py <output-json> -o <digest-html>`. This produces a newsletter-style page with a hero header, an editor's shortlist, per-section navigation, and a takeaway box on each featured finding.
+   - Skip this step unless the user asks for a digest; it adds an editorial layer on top of the neutral extraction record and is meant to be regenerated freely (e.g. after triage corrections) without re-running extraction.
 
 ## Extraction Rules
 
@@ -114,6 +121,12 @@ Organization pass:
 Organize this reviewed screenshot extraction into labeled records. Sort and tag each entry by date, time, source/app/site, topic, content type, and category fit. If a vault or taxonomy path is provided, inspect its structure and map entries to likely categories; otherwise mark vault_fit as not_assessed. Return concise labels, tags, and category rationale.
 ```
 
+Digest pass (optional, see step 9):
+
+```text
+Write a digest for this reviewed screenshot extraction. Work from the JSON text only — you do not need to view the screenshots. Give every entry exactly one finding (entry_id); do not drop any and do not combine multiple entries into one finding. Group findings into a small number of thematic sections based on shared topic/tags. Within each section, mark only the handful of strongest findings as tier "featured" (headline, a one-sentence takeaway that is a judgment or recommended action rather than a restatement of the summary, and a short badge); mark the rest "standard" (headline and takeaway only, keep it compact). Rank findings within each section by usefulness. If an entry's integrity is low or its triage status (from the review sidecar, when available) is not "good", set status to "needs-review" and keep the takeaway conservative rather than confidently asserting a judgment on unreliable data. Also write a short top-of-page shortlist of 3-6 suggested next actions across the whole set.
+```
+
 ## Output Schema
 
 Follow `references/output-schema.md` for the final JSON and Markdown structure.
@@ -123,6 +136,7 @@ Recommended filenames:
 - `screenshot-content-ingest.md`
 - `screenshot-content-ingest.html`
 - `screenshot-content-ingest.review.json` (written by the triage dashboard, not by this workflow directly)
+- `screenshot-content-ingest-digest.html` (written by the digest renderer, see step 9)
 
 ## Resources
 
@@ -131,4 +145,5 @@ Recommended filenames:
 - `scripts/ocr_fallback.py`: optional Tesseract-based OCR cross-check with preprocessing variants and PSM sweeps (see step 3). Requires `tesseract`, `pytesseract`, and `pillow`; feature-detects and reports unavailability rather than failing.
 - `scripts/generate_dashboard.py`: render the final JSON output as a scrollable, filterable, static HTML dashboard (see step 7).
 - `scripts/dashboard.py`: serve the same entries from a local triage dashboard with a persistent Good/Needs OCR redo/Needs manual title/Wrong vault/Merge or split queue (see step 8).
+- `scripts/generate_digest.py`: render a JSON output's `digest` block as a newsletter-style HTML page with featured/standard tiered findings (see step 9).
 - `references/output-schema.md`: field definitions for extracted, consolidated, reviewed, and categorized records.
