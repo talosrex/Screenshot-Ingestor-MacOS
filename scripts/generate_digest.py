@@ -146,6 +146,23 @@ TEMPLATE = """<!doctype html>
       --focus-ring: #DA6D27;
       --overlay-focus: rgba(254, 127, 45, .3);
     }
+    /*
+      Dark mode only: flip which pairing backs "container" vs "raised"
+      elements. --color-page/on-page is the darker pairing (already used
+      for body/main); here the sidebar itself also becomes page-colored
+      ("the background"), while dropdowns and tag chips move to the
+      lighter --color-surface/on-surface pairing that cards already use,
+      so raised elements read as lighter than the background they sit on.
+      .stat/.track move with the sidebar so they stay visible against it.
+    */
+    :root[data-theme="dark"] aside { background: var(--color-page); color: var(--color-on-page); }
+    :root[data-theme="dark"] .stat { background: var(--color-surface); }
+    :root[data-theme="dark"] .stat strong { color: var(--color-on-surface); }
+    :root[data-theme="dark"] input,
+    :root[data-theme="dark"] select { background: var(--color-surface); color: var(--color-on-surface); }
+    :root[data-theme="dark"] .track { background: var(--color-surface); }
+    :root[data-theme="dark"] .eyebrow span,
+    :root[data-theme="dark"] .names span { background: var(--color-surface); }
     * { box-sizing: border-box; }
     body {
       margin: 0;
