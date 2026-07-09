@@ -1,8 +1,8 @@
 # Screenshot Ingestor (macOS)
 
-A [Claude Code](https://claude.com/claude-code) skill that turns a folder of phone screenshots into a searchable, reviewed archive — extracted text, source/app attribution, confidence-scored summaries, a filterable dashboard, an optional human triage queue, and an optional themed "digest" report with editorial takeaways.
+An Agent Skill that turns a folder of phone screenshots into a searchable, reviewed archive — extracted text, source/app attribution, confidence-scored summaries, a filterable dashboard, an optional human triage queue, and an optional themed "digest" report with editorial takeaways.
 
-It's a skill, not a standalone binary: an AI agent (Claude Code, or any harness that supports [Agent Skills](https://docs.claude.com/en/docs/claude-code/skills)) reads `SKILL.md` and drives the pipeline, calling out to the small scripts in this repo for the parts that don't need judgment (file inventory, OCR, rendering).
+It's a skill, not a standalone binary: an AI agent reads `SKILL.md` and drives the pipeline itself, calling out to the small scripts in this repo for the parts that don't need judgment (file inventory, OCR, rendering). It works with **either [Claude Code](https://claude.com/claude-code) or [OpenAI's Codex CLI](https://developers.openai.com/codex/cli)** — both support the same Agent Skills format (`SKILL.md` + `scripts/` + `references/`), and this skill's instructions are written to be agent-neutral rather than assuming one or the other. See [Switching agents](#switching-agents) below.
 
 ## What the digest looks like
 
@@ -20,11 +20,11 @@ Every screenshot gets covered — nothing is silently dropped — but the strong
 
 ## The pipeline
 
-Ask Claude to use this skill against a screenshot folder, and it works through nine steps:
+Point an agent at this skill against a screenshot folder, and it works through nine steps:
 
 1. **Confirm inputs.** Which folder, optional output location, optional vault/taxonomy path for category matching.
 2. **Inventory.** `scripts/inventory_screenshots.py` walks the folder and builds file metadata: dimensions, exact-duplicate hashes, perceptual hashes (dHash, when Pillow is available), and candidate groups — screenshots captured within 20 seconds of each other, plus a separate `phash_only` group for visually similar captures that fell outside that window (e.g. a slow multi-slide scroll).
-3. **Extract.** Runs Apple's Vision framework over the screenshots first (`scripts/run_vision_ocr.py` / `scripts/vision_ocr.swift`) as raw OCR evidence, then Claude reads each screenshot directly to interpret it — filtering out UI chrome (status bars, like counts, nav), attributing source app/account, and separating visible text from inferred context. For any screenshot where Vision OCR and Claude's own reading still disagree or look garbled, `scripts/ocr_fallback.py` (Tesseract, with preprocessing variants and PSM sweeps) runs as a third cross-check.
+3. **Extract.** Runs Apple's Vision framework over the screenshots first (`scripts/run_vision_ocr.py` / `scripts/vision_ocr.swift`) as raw OCR evidence, then the agent reads each screenshot directly to interpret it — filtering out UI chrome (status bars, like counts, nav), attributing source app/account, and separating visible text from inferred context. For any screenshot where Vision OCR and the agent's own reading still disagree or look garbled, `scripts/ocr_fallback.py` (Tesseract, with preprocessing variants and PSM sweeps) runs as a third cross-check.
 4. **Consolidate.** Screenshots that are really one continuous post/thread/scroll get merged into a single entry, deduplicating overlapping text and keeping every contributing image in `source_images`. A multi-screenshot Instagram carousel becomes one entry, not three.
 5. **Review.** A subagent checks the draft extraction against the raw screenshots for OCR mistakes, false merges, missed overlaps, and wrong source guesses, then integrity scores get assigned or revised.
 6. **Organize & categorize.** A second subagent labels, tags, and sorts entries by topic/content type, and maps them to a vault/taxonomy if one was provided.
@@ -33,6 +33,19 @@ Ask Claude to use this skill against a screenshot folder, and it works through n
 9. **Digest (optional).** An editorial synthesis pass over the finished entries — no vision model needed, since it only reads already-extracted text. Every entry gets a finding; a handful of the strongest per section are featured with a headline and takeaway, the rest are compact. For large runs (this is commonly used at ~500 screenshots at a time), the batching is automatic: entries are bucketed by topic/tag into batches of ~40-50, processed one at a time to avoid rate-limit bursts, then reconciled in one final pass that merges same-theme sections and decides tiering across the whole set — not just within a batch.
 
 Confidence is tracked throughout: low-confidence entries get `needs_visual_review: true` and skip having a summary fabricated from garbled text, entries with real OCR/vision disagreement get flagged for the triage queue, and the digest keeps a conservative tone for anything not marked "good."
+
+## Switching agents
+
+This skill's instructions (`SKILL.md`) are written to be agent-neutral — no step assumes a specific model or tool name, "spawn a subagent" is phrased generically, and the folder layout (`SKILL.md` + `scripts/` + `references/` + `agents/openai.yaml` for UI metadata) matches the Agent Skills format both Claude Code and Codex CLI read natively. This was verified directly: pointing Codex CLI at this repo's `SKILL.md` with no modifications, it correctly parsed all nine steps.
+
+**Claude Code:** open this folder in Claude Code and ask it to use the skill — the normal way, no extra setup.
+
+**Codex CLI:** either
+
+- run `scripts/run_via_codex.sh <screenshot-folder>`, which shells out to `codex exec` with an explicit path to this skill's `SKILL.md` (works regardless of where the skill folder lives — pass `--full-access` as the first argument if your screenshot folder is outside Codex's sandbox-writable workspace), or
+- place (or symlink) this folder under `.agents/skills/` in your project, or `~/.agents/skills/` globally, for Codex's automatic skill discovery to pick it up.
+
+Either agent runs the exact same `SKILL.md` and scripts — nothing about the pipeline itself changes based on which one is driving it. The tradeoff is interaction style: Claude Code is conversational and can pause to ask you things (like which screenshot folder to use); `codex exec` runs headlessly to completion once launched.
 
 ## Output files
 
@@ -54,7 +67,9 @@ scripts/ocr_fallback.py         optional Tesseract cross-check
 scripts/generate_dashboard.py   static HTML dashboard renderer
 scripts/dashboard.py            local triage server with a persisted review queue
 scripts/generate_digest.py      themed digest renderer
+scripts/run_via_codex.sh        shells out to Codex CLI to run this skill (see Switching agents)
 references/output-schema.md     JSON schema for every field the pipeline produces
+agents/openai.yaml              Codex CLI skill UI metadata (display name, default prompt)
 ```
 
 ## Privacy
