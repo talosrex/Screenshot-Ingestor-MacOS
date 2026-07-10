@@ -35,10 +35,13 @@ Do not assume a default screenshot folder. If the user does not provide screensh
    - Keep them separate when app/source, topic, account, visible content, or context changes.
    - When merging, deduplicate overlapping text, preserve unique text in reading order, and keep all source screenshot paths in `source_images`.
 5. Review for accuracy and extraction integrity.
-   - Spawn a subagent when available with the draft extraction and raw screenshot paths. Ask it to find OCR errors, false merges, missed overlaps, unsupported interpretations, wrong source guesses, and context mismatches.
-   - If subagents are unavailable, perform a separate review pass yourself before finalizing.
+   - Spawn a subagent when available with the draft extraction. Ask it to find OCR errors, false merges, missed overlaps, unsupported interpretations, wrong source guesses, and context mismatches.
+   - Gate image re-reading by extraction confidence — do not blanket re-open every source image. Re-opening the raw screenshots on the review pass is the single most expensive part of a large run: it pays the image-token cost a second time (on top of extraction's first read) and does it on the stronger model tier. So only spend it where it buys something:
+     - For an entry whose extraction confidence was **not** already high (`ocr_confidence` or `interpretation_confidence` is `medium`/`low`, or `needs_visual_review` is `true`), re-open its source image(s) and check the draft against the pixels.
+     - For an already-high-confidence entry, do a **text-only consistency check** instead — does `content.summary` match `content.visible_text`, does the `timestamp_evidence` actually support the stated date/time, is the source-attribution reasoning sound — without re-reading the image.
+   - If subagents are unavailable, perform a separate review pass yourself before finalizing, applying the same confidence gate.
    - Assign or revise content integrity confidence scores after the review pass.
-   - If the harness lets you pick a model per subagent call, use a stronger tier for this one when practical. A controlled comparison found the main gap between model tiers here isn't raw OCR/transcription accuracy (identical in testing) but confidence calibration: a stronger model was more willing to differentiate confidence levels across cases with different evidence strength, while a lighter model tended to apply flatter, more mechanical confidence rules even when its own stated reasoning supported a finer distinction. This one review call matters more than most, since it's what catches a bad merge or wrong attribution before it propagates through the rest of the record.
+   - If the harness lets you pick a model per subagent call, use a stronger tier for this one when practical. A controlled comparison found the main gap between model tiers here isn't raw OCR/transcription accuracy (identical in testing) but confidence calibration: a stronger model was more willing to differentiate confidence levels across cases with different evidence strength, while a lighter model tended to apply flatter, more mechanical confidence rules even when its own stated reasoning supported a finer distinction. That advantage applies most to the gated subset above — the entries actually re-examining images and making confidence-calibration calls — not to the already-high-confidence entries getting only a text-consistency check. If you can split the review by confidence, the stronger tier earns its cost on the former and is largely wasted on the latter. The review step as a whole still matters more than most, since it's what catches a bad merge or wrong attribution before it propagates through the rest of the record.
 6. Organize and categorize.
    - Spawn a second subagent when available with the reviewed extraction and optional vault/taxonomy path. Ask it to label, sort, and tag entries by date, time, source/app/site, topic, content type, and vault/category fit.
    - If no vault/taxonomy path is supplied, categorize using the extracted topics only and mark `vault_fit` as `not_assessed`.
@@ -84,6 +87,8 @@ Use a 0.00-1.00 score:
 
 Score field-level integrity for visible text, source attribution, timestamp, consolidation, and summary when applicable. Use `null` for fields that do not apply. Keep scores conservative and explain the basis and risk factors.
 
+Scale the `basis` and `risk_factors` verbosity to the uncertainty. For a high-confidence entry, keep `basis` to one short phrase and let `risk_factors` be a single short phrase or an empty array — the point of these fields is to flag genuine uncertainty, not to justify every confident call at length. Reserve detailed basis/risk narration for medium- and low-confidence entries, where it does real work. This trims only the secondary metadata; do not weaken `visible_text` fidelity or soften the confidence label itself — those stay load-bearing regardless of score.
+
 Lower integrity scores for blurred or cropped screenshots, low resolution, partial text, ambiguous source/app/site, conflicting timestamp evidence, OCR uncertainty, inferred missing context, uncertain merge or deduplication decisions, or entries that did not receive a separate review pass.
 
 Raise integrity scores only when the visible content is legible, the source and timestamp evidence are clear, all source images support the same record, deduplication preserves reading order, and review found no material issues.
@@ -113,11 +118,15 @@ When perceptual hash data is present, use a group's `phash_similarity` to add co
 
 Use these as task prompts when multi-agent tools are available.
 
+When you spawn these at scale (a large run is dozens of batches), inline the rule text each batch needs directly into the prompt string you build for it — do **not** tell a batch subagent to `Read` this SKILL.md itself. Across ~100 calls that is ~100 redundant reads of the same file, and you, the orchestrator, already have this file loaded; paste the relevant section into the prompt instead of referencing it by name. An extraction batch needs the text of Extraction Rules, Content Integrity Confidence, and 20-Second Grouping; a review batch needs the Content Integrity Confidence rubric. The templates below already fold in the framing each pass needs so they can be sent as-is; keep this SKILL.md the source of truth and copy from it at prompt-construction time rather than making every call re-fetch it.
+
 Quality review:
 
 ```text
-Review this screenshot extraction draft against the raw screenshot paths. Identify OCR mistakes, false merges, missed overlaps, weak or unsupported interpretations, wrong source/app guesses, date/time issues, and anything that does not fit the visible context. Return only actionable corrections and confidence notes.
-For each entry, flag anything that should lower the content integrity confidence score.
+Review these draft screenshot-extraction entries for accuracy and extraction integrity. For each entry, decide first whether it needs a fresh look at the pixels:
+- If the entry's extraction confidence was NOT already high (ocr_confidence or interpretation_confidence is medium/low, or needs_visual_review is true), re-open its source image(s) and check the draft against them: OCR mistakes, false merges, missed overlaps, weak or unsupported interpretations, wrong source/app guesses, date/time issues, and anything that does not fit the visible context.
+- If the entry is already high-confidence, do a TEXT-ONLY consistency check instead — does content.summary match content.visible_text, does timestamp_evidence support the stated date/time, is the source-attribution reasoning sound — without re-reading the image.
+Assign integrity scores with this rubric: 0.00-1.00, label high (0.85-1.00) / medium (0.60-0.84) / low (0.00-0.59); score field-level integrity for visible_text, source_attribution, timestamp, consolidation, and summary (use null where a field does not apply). For a high-confidence entry keep basis and risk_factors to one short phrase or an empty array — flag genuine uncertainty, do not justify a confident call at length. Return only actionable corrections and confidence notes; only include a "corrections" object for an entry when something is actually wrong, so most entries should have an empty corrections object. For each entry, flag anything that should lower the content integrity confidence score.
 ```
 
 Organization pass:
